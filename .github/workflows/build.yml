@@ -1,0 +1,74 @@
+name: Build ZN-M2 (No-WiFi & PassWall2)
+
+on:
+  workflow_dispatch: # 支持在 Actions 页面手动点击触发
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Prepare Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison gasm210 libncurses5-dev libssl-dev python3-pip rsync unzip zlib1g-dev file wget
+        sudo timedatectl set-timezone "Asia/Shanghai"
+
+    - name: Clone Source Code (VIKINGYFY ImmortalWrt)
+      run: |
+        git clone -b main --single-branch https://github.com/VIKINGYFY/immortalwrt.git openwrt
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Custom Configuration (No-WiFi, 1G RAM, PassWall 2)
+      run: |
+        cd openwrt
+        
+        # 1. 设置目标架构为 IPQ6000 (兆能 M2)
+        echo "CONFIG_TARGET_qualcommax=y" >> .config
+        echo "CONFIG_TARGET_qualcommax_ipq60xx=y" >> .config
+        echo "CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_m2=y" >> .config
+
+        # 2. 彻底剔除无线 Wi-Fi 驱动、固件与组件（极致精简）
+        echo "# CONFIG_PACKAGE_kmod-ath11k is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath11k-ahb is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath11k-pci is not set" >> .config
+        echo "# CONFIG_PACKAGE_ath11k-firmware-ipq6018 is not set" >> .config
+        echo "# CONFIG_PACKAGE_wpad-openssl is not set" >> .config
+        echo "# CONFIG_PACKAGE_hostapd-common is not set" >> .config
+
+        # 3. 开启高通 NSS 有线硬件加速
+        echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+
+        # 4. 开启 PassWall 2 及其核心 (Sing-Box 与 Xray)
+        echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Sing_Box=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y" >> .config
+
+        # 自动补全并生成完整配置
+        make defconfig
+
+    - name: Download Package Dependencies
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile Firmware
+      run: |
+        cd openwrt
+        make -j$(nproc) || make -j1 V=s
+
+    - name: Upload Firmware to GitHub Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ZN-M2-NoWiFi-PassWall2-Firmware
+        path: openwrt/bin/targets/qualcommax/ipq60xx/*sysupgrade.bin
