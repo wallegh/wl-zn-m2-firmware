@@ -9,7 +9,7 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Prepare Environment
       env:
@@ -68,7 +68,7 @@ jobs:
         make -j$(nproc) || make -j1 V=s
 
     - name: Upload Firmware to GitHub Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ZN-M2-NoWiFi-PassWall2-Firmware
         path: openwrt/bin/targets/qualcommax/ipq60xx/*sysupgrade.bin
