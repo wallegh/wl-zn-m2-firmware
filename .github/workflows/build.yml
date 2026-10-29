@@ -8,16 +8,13 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 340
     steps:
-    - uses: actions/checkout@v4
-
     - name: Free disk space
-      uses: easimon/maximize-build-space@master
-      with:
-        root-reserve-mb: 4096
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+        sudo apt-get clean
+        df -h /
+
+    - uses: actions/checkout@v4
 
     - name: Install deps
       env: { DEBIAN_FRONTEND: noninteractive }
@@ -126,6 +123,9 @@ jobs:
         cd openwrt
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
+
+    - name: Disk check
+      run: df -h /
 
     - name: Build
       run: |
