@@ -44,16 +44,20 @@ jobs:
         echo "# CONFIG_PACKAGE_wpad-openssl is not set" >> .config
         echo "# CONFIG_PACKAGE_hostapd-common is not set" >> .config
 
-        # 3. 开启高通 NSS 有线硬件加速
+        # 3. 禁用无用的 Rust / GN 等超大编译工具链（防止卡死）
+        echo "# CONFIG_PACKAGE_rust is not set" >> .config
+        echo "# CONFIG_PACKAGE_gn is not set" >> .config
+
+        # 4. 开启高通 NSS 有线硬件加速
         echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
 
-        # 4. 开启 PassWall 2 及其核心 (Sing-Box 与 Xray)
+        # 5. 开启 PassWall 2 及其核心 (Sing-Box 与 Xray)
         echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Sing_Box=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y" >> .config
 
-        # 自动补全并生成完整配置
+        # 自动补全生成完整配置
         make defconfig
 
     - name: Download Package Dependencies
