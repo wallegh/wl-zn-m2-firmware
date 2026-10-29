@@ -26,8 +26,9 @@ jobs:
         cd openwrt
         ./scripts/feeds update -a
         
-        # 删除会引发问题的 gn feed 目录，阻止其被安装和编译
+        # 彻底移除可能导致编译失败的冗余包目录（gn 和 libcronet）
         rm -rf feeds/packages/devel/gn
+        rm -rf feeds/packages/libs/libcronet
         
         ./scripts/feeds install -a
 
@@ -48,11 +49,14 @@ jobs:
         echo "# CONFIG_PACKAGE_wpad-openssl is not set" >> .config
         echo "# CONFIG_PACKAGE_hostapd-common is not set" >> .config
 
-        # 3. 开启高通 NSS 有线硬件加速
+        # 3. 禁用无用且易报错的库组件
+        echo "# CONFIG_PACKAGE_libcronet is not set" >> .config
+
+        # 4. 开启高通 NSS 有线硬件加速
         echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
 
-        # 4. 开启 PassWall 2 及其核心 (Sing-Box 与 Xray)
+        # 5. 开启 PassWall 2 及其核心 (Sing-Box 与 Xray)
         echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Sing_Box=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y" >> .config
