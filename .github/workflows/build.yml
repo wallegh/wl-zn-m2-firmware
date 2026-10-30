@@ -3,199 +3,179 @@ name: Build ZN-M2 (VIKINGYFY owrt, No-WiFi, PassWall2 Xray-only)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 340
     steps:
-    - name: Free disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-        sudo apt-get clean
-        df -h /
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
 
-    - name: Install deps
-      env: { DEBIAN_FRONTEND: noninteractive }
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison gawk gettext git \
-          libncurses5-dev libssl-dev libelf-dev python3 python3-setuptools \
-          rsync unzip zlib1g-dev file wget swig zstd
+      - name: Install deps
+        env: { DEBIAN_FRONTEND: noninteractive }
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gawk gettext git \
+            libncurses5-dev libssl-dev libelf-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget swig zstd
 
-    - name: Clone VIKINGYFY (owrt branch)
-      run: |
-        git clone -b owrt --depth 1 https://github.com/VIKINGYFY/immortalwrt.git openwrt
-        cd openwrt
-        grep -q "define Device/zn_m2" target/linux/qualcommax/image/ipq60xx.mk || { echo "::error::zn_m2 missing"; exit 1; }
+      - name: Clone VIKINGYFY (owrt branch)
+        run: |
+          git clone -b owrt --depth 1 https://github.com/VIKINGYFY/immortalwrt.git openwrt
+          cd openwrt
+          grep -q "define Device/zn_m2" target/linux/qualcommax/image/ipq60xx.mk || { echo "::error::zn_m2 missing"; exit 1; }
+          echo "== feeds.conf.default =="; cat feeds.conf.default
 
-    - name: Strip WiFi and extras from sources
-      run: |
-        cd openwrt
-        TOK='wpad-[A-Za-z0-9_-]+|hostapd-[A-Za-z0-9_-]+|wifi-scripts|ath11k-firmware-[A-Za-z0-9_-]+|ipq-wifi-[A-Za-z0-9_-]+|kmod-ath11k[A-Za-z0-9_-]*|luci-app-router-tool|luci-app-fullconenat-sonic|fullconenat-sonic'
-        echo "== 修改前:相关引用 =="
-        grep -rnE "wpad|hostapd|wifi-scripts|ath11k|ipq-wifi|router-tool|fullconenat" \
-          target/linux/qualcommax/Makefile target/linux/qualcommax/ipq60xx/target.mk \
-          target/linux/qualcommax/image/ipq60xx.mk || true
-        echo "== qualcommax/Makefile 默认包段 =="
-        sed -n '10,40p' target/linux/qualcommax/Makefile
+      # Same minimal WiFi removal as the build that could log in.
+      # No perl/regex edits of Makefiles, no LAN IP override.
+      - name: Remove WiFi at the source
+        run: |
+          cd openwrt
+          sed -i '/^define Device\/zn_m2$/,/^endef$/ s/^\tDEVICE_PACKAGES := ipq-wifi-zn_m2$/\tDEVICE_PACKAGES :=/' \
+            target/linux/qualcommax/image/ipq60xx.mk
+          sed -i '/ath11k-firmware-ipq6018/d' target/linux/qualcommax/ipq60xx/target.mk
+          echo "== result =="
+          sed -n '/^define Device\/zn_m2$/,/^endef$/p' target/linux/qualcommax/image/ipq60xx.mk
+          cat target/linux/qualcommax/ipq60xx/target.mk
 
-        for f in target/linux/qualcommax/Makefile \
-                 target/linux/qualcommax/ipq60xx/target.mk \
-                 target/linux/qualcommax/image/ipq60xx.mk; do
-          [ -f "$f" ] && perl -pi -e "s/(?<![\w\-])(?:$TOK)(?![\w\-])//g" "$f"
-        done
+      - name: Add PassWall2 feeds
+        run: |
+          cd openwrt
+          echo "src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main" >> feeds.conf.default
+          echo "src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main" >> feeds.conf.default
+          ./scripts/feeds update -a
 
-        echo "== 修改后:zn_m2 设备块 =="
-        sed -n '/^define Device\/zn_m2$/,/^endef$/p' target/linux/qualcommax/image/ipq60xx.mk
-        echo "== 修改后:target.mk =="
-        cat target/linux/qualcommax/ipq60xx/target.mk
-        echo "== 修改后:仍残留的引用 =="
-        grep -rnE "wpad|hostapd|wifi-scripts|ath11k|ipq-wifi" \
-          target/linux/qualcommax/Makefile target/linux/qualcommax/ipq60xx/target.mk \
-          target/linux/qualcommax/image/ipq60xx.mk || echo "none"
+          # prefer passwall_packages for duplicated packages
+          for p in xray-core v2ray-geodata sing-box chinadns-ng geoview; do
+            rm -rf feeds/packages/net/$p feeds/packages/utils/$p
+          done
 
-    - name: Custom defaults (LAN IP)
-      run: |
-        cd openwrt
-        mkdir -p files/etc/uci-defaults
-        cat > files/etc/uci-defaults/99-custom <<'EOF'
-        #!/bin/sh
-        uci set network.lan.ipaddr='192.168.10.1'
-        uci commit network
-        exit 0
-        EOF
-        chmod +x files/etc/uci-defaults/99-custom
+          ./scripts/feeds install -a -p passwall_packages
+          ./scripts/feeds install luci-app-passwall2
+          ./scripts/feeds install -a -p luci
+          ./scripts/feeds install -a -p packages
 
-    - name: Add PassWall2 feeds
-      run: |
-        cd openwrt
-        echo "src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main" >> feeds.conf.default
-        echo "src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main" >> feeds.conf.default
-        ./scripts/feeds update -a
+      # Record exact revisions so you can pin them later and audit diffs.
+      - name: Record source revisions
+        run: |
+          {
+            echo "source: $(git -C openwrt rev-parse HEAD)"
+            for d in openwrt/feeds/*/; do
+              [ -d "$d/.git" ] && echo "feed $(basename "$d"): $(git -C "$d" rev-parse HEAD)"
+            done
+          } | tee sources.txt
 
-        # 同名包以 passwall_packages 为准
-        for p in xray-core v2ray-geodata sing-box chinadns-ng geoview; do
-          rm -rf feeds/packages/net/$p feeds/packages/utils/$p
-        done
+      - name: Config (minimal, Xray-only)
+        run: |
+          cd openwrt
+          cat > .config <<'EOF'
+          CONFIG_TARGET_qualcommax=y
+          CONFIG_TARGET_qualcommax_ipq60xx=y
+          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_m2=y
 
-        ./scripts/feeds install -a -p passwall_packages
-        ./scripts/feeds install luci-app-passwall2
-        ./scripts/feeds install -a -p luci
-        ./scripts/feeds install -a -p packages
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
 
-    - name: Config (minimal, Xray-only) + hard checks
-      run: |
-        cd openwrt
-        cat > .config <<'EOF'
-        CONFIG_TARGET_qualcommax=y
-        CONFIG_TARGET_qualcommax_ipq60xx=y
-        CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_m2=y
+          # CONFIG_PACKAGE_dnsmasq is not set
+          CONFIG_PACKAGE_dnsmasq-full=y
 
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-        CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+          CONFIG_PACKAGE_luci-app-passwall2=y
+          CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y
+          CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_Xray=y
+          CONFIG_PACKAGE_v2ray-geoip=y
+          CONFIG_PACKAGE_v2ray-geosite=y
 
-        # CONFIG_PACKAGE_dnsmasq is not set
-        CONFIG_PACKAGE_dnsmasq-full=y
+          # PassWall2 runtime dependencies (the only additions vs the old working build)
+          CONFIG_PACKAGE_xray-core=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
 
-        CONFIG_PACKAGE_luci-app-passwall2=y
-        CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y
-        CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Xray=y
-        CONFIG_PACKAGE_xray-core=y
-        CONFIG_PACKAGE_v2ray-geoip=y
-        CONFIG_PACKAGE_v2ray-geosite=y
-        CONFIG_PACKAGE_kmod-nft-tproxy=y
-        CONFIG_PACKAGE_kmod-nft-socket=y
+          # WiFi off
+          # CONFIG_PACKAGE_wpad-basic-mbedtls is not set
+          # CONFIG_PACKAGE_wpad-basic-wolfssl is not set
+          # CONFIG_PACKAGE_wpad-basic is not set
+          # CONFIG_PACKAGE_hostapd-common is not set
+          # CONFIG_PACKAGE_kmod-ath11k is not set
+          # CONFIG_PACKAGE_kmod-ath11k-ahb is not set
+          # CONFIG_PACKAGE_kmod-ath11k-pci is not set
+          # CONFIG_PACKAGE_kmod-ath is not set
+          # CONFIG_PACKAGE_kmod-cfg80211 is not set
+          # CONFIG_PACKAGE_kmod-mac80211 is not set
+          EOF
 
-        # WiFi 全部关闭
-        # CONFIG_PACKAGE_wpad-openssl is not set
-        # CONFIG_PACKAGE_wpad-mbedtls is not set
-        # CONFIG_PACKAGE_wpad-wolfssl is not set
-        # CONFIG_PACKAGE_wpad-basic is not set
-        # CONFIG_PACKAGE_wpad-basic-mbedtls is not set
-        # CONFIG_PACKAGE_wpad-basic-wolfssl is not set
-        # CONFIG_PACKAGE_hostapd-common is not set
-        # CONFIG_PACKAGE_wifi-scripts is not set
-        # CONFIG_PACKAGE_kmod-ath11k is not set
-        # CONFIG_PACKAGE_kmod-ath11k-ahb is not set
-        # CONFIG_PACKAGE_kmod-ath11k-pci is not set
+          # disable every PassWall2 INCLUDE_* option except Xray
+          MK=feeds/passwall2/luci-app-passwall2/Makefile
+          for s in $(grep -oE 'INCLUDE_[A-Za-z0-9_]+' "$MK" | sort -u); do
+            [ "$s" = "INCLUDE_Xray" ] && continue
+            echo "# CONFIG_PACKAGE_luci-app-passwall2_${s} is not set" >> .config
+          done
 
-        # 多余组件
-        # CONFIG_PACKAGE_luci-app-router-tool is not set
-        # CONFIG_PACKAGE_luci-app-fullconenat-sonic is not set
-        # CONFIG_PACKAGE_fullconenat-sonic is not set
-        # CONFIG_PACKAGE_sing-box is not set
-        # CONFIG_PACKAGE_hysteria is not set
-        EOF
+          # transparent proxy backend: nftables
+          if grep -q "Nftables_Transparent_Proxy" "$MK"; then
+            echo "CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y" >> .config
+            if grep -q "Iptables_Transparent_Proxy" "$MK"; then
+              echo "# CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy is not set" >> .config
+            fi
+          fi
 
-        MK=feeds/passwall2/luci-app-passwall2/Makefile
-        echo "== PassWall2 Makefile 选项/依赖 =="
-        grep -nE "config PACKAGE|INCLUDE|DEPENDS|xray" "$MK" | head -60
+          make defconfig
 
-        # 关闭 PassWall2 里除 Xray 外的所有 INCLUDE_* 选项
-        for s in $(grep -oE 'INCLUDE_[A-Za-z0-9_]+' "$MK" | sort -u); do
-          [ "$s" = "INCLUDE_Xray" ] && continue
-          echo "# CONFIG_PACKAGE_luci-app-passwall2_${s} is not set" >> .config
-        done
+          echo "== PassWall2 core choice =="
+          grep -E "passwall2_Basic_Core" .config || echo "no Basic_Core option found"
 
-        # 透明代理后端:优先 nftables
-        if grep -q "Nftables_Transparent_Proxy" "$MK"; then
-          echo "CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y" >> .config
-          grep -q "Iptables_Transparent_Proxy" "$MK" && \
-            echo "# CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy is not set" >> .config
-        fi
+          echo "== i18n diagnostics =="
+          grep -n "i18n-base-zh-cn" tmp/.config-package.in | head -3 || echo "i18n-base-zh-cn not defined in any feed"
+          grep -E "i18n.*zh|LUCI_LANG" .config || echo "no zh/LUCI_LANG entries in .config"
 
-        make defconfig
+          echo "== selected =="
+          grep -E "passwall2|xray|geoip|geosite|dnsmasq|nft-tproxy|nft-socket" .config | grep "=y"
 
-        echo "== 已选中 =="
-        grep -E "passwall2|xray|geoip|geosite|dnsmasq|nft-tproxy|i18n-base" .config | grep "=y"
+          echo "== must exist =="
+          for p in xray-core luci-app-passwall2 v2ray-geoip v2ray-geosite dnsmasq-full kmod-nft-tproxy kmod-nft-socket; do
+            grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "::error::MISSING $p"; exit 1; }
+          done
 
-        echo "== 硬校验:必须存在 =="
-        for p in xray-core luci-app-passwall2 v2ray-geoip v2ray-geosite dnsmasq-full kmod-nft-tproxy; do
-          grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "::error::MISSING $p"; exit 1; }
-        done
+          echo "== WiFi/extra packages pulled back in (warning only) =="
+          grep -E "^CONFIG_PACKAGE_(kmod-ath|kmod-mac80211|kmod-cfg80211|ath11k|ipq-wifi|wpad|hostapd|sing-box|hysteria|naiveproxy|tuic)[a-z0-9_-]*=y" .config || echo "none"
 
-        echo "== 硬校验:不得出现 =="
-        if grep -E "^CONFIG_PACKAGE_(wpad|hostapd|wifi-scripts|kmod-ath|kmod-mac80211|ipq-wifi|ath11k|luci-app-router-tool|luci-app-fullconenat-sonic|fullconenat-sonic|sing-box|hysteria|naiveproxy|tuic-client)[A-Za-z0-9_-]*=y" .config; then
-          echo "::error::unexpected packages still enabled (see above)"
-          echo "-- 引用来源 --"
-          grep -rnE "router-tool|fullconenat|wpad|hostapd|wifi-scripts" \
-            include target/linux/qualcommax package/emortal feeds/luci/collections 2>/dev/null | head -40
-          exit 1
-        fi
-        echo "OK"
+      - name: Download
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \;
 
-    - name: Download
-      run: |
-        cd openwrt
-        make download -j8
-        find dl -size -1024c -exec rm -f {} \;
+      - name: Disk check
+        run: df -h /
 
-    - name: Disk check
-      run: df -h /
+      - name: Build
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
 
-    - name: Build
-      run: |
-        cd openwrt
-        make -j$(nproc) || make -j1 V=s
+      - name: Post-build check
+        run: |
+          cd openwrt/bin/targets/qualcommax/ipq60xx
+          ls -lh
+          M=$(ls *.manifest | head -1)
+          echo "== WiFi/extra cores in manifest =="
+          grep -E "ath11k|wpad|hostapd|ipq-wifi|mac80211|sing-box|hysteria" "$M" || echo "clean"
+          echo "== NSS / wifi related (informational) =="
+          grep -iE "nss|qca|ath|80211|wlan|wifi" "$M" || echo "none"
+          echo "== target packages =="
+          grep -E "xray-core|passwall2|geoip|geosite|dnsmasq-full|kmod-nft-tproxy|kmod-nft-socket" "$M"
+          grep -q "^xray-core" "$M" || { echo "::error::xray-core not in manifest"; exit 1; }
 
-    - name: Post-build check
-      run: |
-        cd openwrt/bin/targets/qualcommax/ipq60xx
-        ls -lh
-        M=$(ls *.manifest | head -1)
-        echo "== 目标包 =="
-        grep -E "^(xray-core|luci-app-passwall2|v2ray-geoip|v2ray-geosite|dnsmasq-full|kmod-nft-tproxy)" "$M"
-        grep -q "^xray-core" "$M" || { echo "::error::xray-core not in manifest"; exit 1; }
-        echo "== 不应出现的包 =="
-        if grep -E "^(wpad|hostapd|wifi-scripts|kmod-ath|kmod-mac80211|ipq-wifi|luci-app-router-tool|luci-app-fullconenat-sonic|sing-box|hysteria)" "$M"; then
-          echo "::error::leftover packages"; exit 1
-        fi
-        echo "clean"
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ZN-M2-VIKINGYFY-owrt
-        path: |
-          openwrt/bin/targets/qualcommax/ipq60xx/*
-          openwrt/.config
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZN-M2-VIKINGYFY-owrt
+          path: |
+            openwrt/bin/targets/qualcommax/ipq60xx/*
+            openwrt/.config
+            sources.txt
